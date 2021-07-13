@@ -15,7 +15,7 @@ const kafka = new Kafka({
 })
 
 app.use(express.urlencoded({ extended: true }))
-app.post("/", (req, res) => {
+app.post("/", async(req, res) => {
     try {
         // CHECK IF THE USER IS ALREADY IN THE CACHE
         // ADD NEW USER TO CACHE AND CREATE A NEW TOPIC
@@ -49,15 +49,45 @@ io.on('connect', (socket) => {
     console.log(`✔️ Socket Started`, socket.id);
 
     let alreadyRegistered = await getData(req.body.phone)
-    if (alreadyRegistered == null) {
-        socket.on("join", () => {
 
+    const consumer = kafka.consumer({ groupId: alreadyRegistered.id })
+
+    if (alreadyRegistered != null) {
+        socket.on("join", async() => {
+            await consumer.connect()
+            await consumer.subscribe({
+                topic: alreadyRegistered.phone,
+                fromBeginning: true
+            })
+
+            await consumer.run({
+                eachMessage: async result => {
+                    console.log(`RVD msg: ${result.message.value} on partition ${result.partition}`)
+                    socket.emit("message", result)
+                }
+            })
         })
     }
 
-    socket.on('disconnect', () => {})
+    socket.on('disconnect', () => {
+        console.log("User disconnected", socket.id)
+        await consumer.disconnect()
+    })
 
-    socket.on('sendMessage', ({ message }) => {
-
+    socket.on('sendMessage', async({ message, phone }) => {
+        if (message != null && message != "") {
+            const producer = kafka.producer()
+            await producer.connect()
+            const result = await producer.send({
+                topic: phone,
+                messages: [{
+                    value: message,
+                    partition: 1
+                }]
+            })
+            console.log(`Sent ${JSON.stringify(result)}`)
+            socket.emit("message", result)
+            await producer.disconnect()
+        }
     });
 });
